@@ -20,11 +20,16 @@ class MongodbAdapter
      * @var mixed
      */
     private mixed $collection;
-    
+
     /**
-     * @var int
+     * @var mixed
      */
-    private int $inserted_id;
+    private mixed $inserted_id;
+
+    /**
+     * @var array
+     */
+    public static array $filter_for_mongodb = [];
 
     /**
      * Configuration MongoDB connection
@@ -32,14 +37,20 @@ class MongodbAdapter
      * @param string $host
      * @param string|null $user
      * @param string|null $pass
-     * 
+     *
      * @return static
      */
     public static function configuration(string $host, ?string $user = null, ?string $pass = null): static
     {
-        ($user != '' && $pass != '')
-            ? self::$client = new \MongoDB\Client('mongodb://' . $user . ':' . $pass . '@' . $host)
-            : self::$client = new \MongoDB\Client('mongodb://' . $host);
+        try {
+            ($user != '' && $pass != '')
+                ? $config = 'mongodb://' . $user . ':' . $pass . '@' . $host
+                : $config = 'mongodb://' . $host;
+
+            self::$client = new \MongoDB\Client($config);
+        } catch (\Exception $e) {
+            echo $e->getMessage();
+        }
 
         return new static;
     }
@@ -58,7 +69,7 @@ class MongodbAdapter
      * Get all collections from database
      *
      * @param string $database
-     * 
+     *
      * @return array
      */
     public function getCollections(string $database): array
@@ -88,13 +99,12 @@ class MongodbAdapter
      * Selects a database on the server
      *
      * @param string $database
-     * 
+     *
      * @return self
      */
     public function setDatabase(string $database): self
     {
         $this->database = self::$client->selectDatabase($database);
-        //$this->database = self::$client->$database;
         return $this;
     }
 
@@ -102,7 +112,7 @@ class MongodbAdapter
      * Set table
      *
      * @param string $table
-     * 
+     *
      * @return self
      */
     public function setTable(string $table): self
@@ -111,22 +121,35 @@ class MongodbAdapter
         return $this;
     }
 
-    /* public static function setDatabaseAndTable(?string $database, ?string $table): self
+    /**
+     * Describe a MongoDB collection
+     *
+     * @param string $collection
+     *
+     * @return mixed
+     */
+    public function describeCollection(string $collection): mixed
     {
-        $this->collection = self::$client->$database->$table;
-        return $this;
-    } */
+        $stats = $this->database->command(['collStats' => $collection])->toArray()[0];
+
+        return [
+            'collection_name' => $stats['ns'],
+            'document_count' => $stats['count'],
+            'storage_size' => $stats['storageSize'] . ' bytes',
+            'indexes' => json_encode($stats['indexSizes'], JSON_PRETTY_PRINT)
+        ];
+    }
 
     /**
      * Count the number of documents
      *
      * @param array $where The filter criteria that specifies the documents to count
-     * 
+     *
      * @return int
      */
-    public function count(array $where): int
+    public function count(): int
     {
-        return $this->collection->countDocuments($where);
+        return $this->collection->countDocuments();
     }
 
     /**
@@ -134,30 +157,43 @@ class MongodbAdapter
      *
      * @param array|null $where The filter criteria that specifies the documents to query
      * @param array|null $options An array specifying the desired options
-     * 
+     *
      * @return mixed
      */
-    public function select(?array $where = null, ?array $options = null): mixed
+    public function select(bool $all = false): mixed
     {
-        if ($where != null && array_key_exists('_id', $where)) {
-            $id = new \MongoDB\BSON\ObjectId($where['_id']);
-            $where = ['_id' => $id];
+        $sort = [];
+        //dump_die(self::$filter_for_mongodb);
+
+        try {
+            if (Katrina::$latest_mongodb == true) {
+                $sort = ['_id' => -1];
+                Katrina::$limit = 1;
+            }
+
+            $options_mongodb = [
+                'typeMap' => ['root' => 'object', 'document' => 'object'],
+                'limit' => Katrina::$limit,
+                'sort' => $sort
+            ];
+
+            /* if (!is_null(Katrina::$group)) {
+                dump_die(Katrina::$columns);
+            } */
+
+            return ($all == null)
+                ? $this->collection->findOne(self::$filter_for_mongodb, $options_mongodb)
+                : $this->collection->find(self::$filter_for_mongodb, $options_mongodb)->toArray();
+        } catch (\Exception) {
+            return null;
         }
-
-        $options_mongodb = [
-            'typeMap' => ['root' => 'array', 'document' => 'array'],
-            'limit' => Katrina::$limit
-        ];
-
-        if ($where != null) return $this->collection->findOne($where, $options_mongodb);
-        return $this->collection->find(options: $options_mongodb)->toArray();
     }
 
     /**
      * Insert one document
      *
      * @param array $data If array is recursive, insert multiple documents
-     * 
+     *
      * @return mixed
      */
     public function insert(array $data): mixed
@@ -190,7 +226,7 @@ class MongodbAdapter
      *
      * @param array $data The filter criteria that specifies the documents to update
      * @param array $where Specifies the field and value combinations to update and any relevant update operators
-     * 
+     *
      * @return mixed
      */
     public function update(array $data, array $where): mixed
@@ -212,7 +248,7 @@ class MongodbAdapter
      * Deletes all documents that match the filter criteria
      *
      * @param array $data The filter criteria that specifies the documents to delete
-     * 
+     *
      * @return mixed
      */
     public function delete(array $data): mixed
